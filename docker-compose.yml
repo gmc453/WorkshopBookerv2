@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-workshop
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: twoje_haslo
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin-workshop
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  workshop-service:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    container_name: workshop-service
+    working_dir: /src
+    command: ["dotnet", "run", "--urls", "http://0.0.0.0:80", "--project", "WorkshopBooker.Api/WorkshopBooker.Api.csproj"]
+    volumes:
+      - ./src:/src
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Server=postgres;Port=5432;Database=WorkshopDb;User Id=postgres;Password=twoje_haslo;
+    ports:
+      - "5000:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    container_name: api-gateway
+    working_dir: /src
+    command: ["dotnet", "run", "--urls", "http://0.0.0.0:80", "--project", "Gateway/WorkshopBooker.Gateway/WorkshopBooker.Gateway.csproj"]
+    volumes:
+      - ./src:/src
+    ports:
+      - "5000:80"
+    depends_on:
+      workshop-service:
+        condition: service_started
+      emergency-service:
+        condition: service_started
+      insurance-service:
+        condition: service_started
+      legal-service:
+        condition: service_started
+
+  web-app:
+    image: node:18
+    container_name: web-app
+    working_dir: /app
+    command: ["npm", "run", "dev"]
+    volumes:
+      - ./frontend/client:/app
+    environment:
+      API_GATEWAY_URL: http://api-gateway:80
+      NEXT_PUBLIC_API_GATEWAY_URL: http://api-gateway:80
+    ports:
+      - "3000:3000"
+    depends_on:
+      api-gateway:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  emergency-db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: emergency_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5434:5432"
+
+  emergency-service:
+    build: ./src/Services/Emergency/WorkshopBooker.Emergency.Api
+    ports:
+      - "5001:5001"
+    environment:
+      - ConnectionStrings__EmergencyConnection=Server=emergency-db;Port=5432;Database=emergency_db;User Id=admin;Password=password;
+      - ASPNETCORE_URLS=http://0.0.0.0:5001
+    depends_on:
+      - emergency-db
+
+  insurance-service:
+    build: ./src/Services/Insurance/WorkshopBooker.Insurance.Api
+    ports:
+      - "5002:5002"
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:5002
+    depends_on:
+      - workshop-service
+
+  legal-service:
+    build: ./src/Services/Legal/WorkshopBooker.Legal.Api
+    ports:
+      - "5003:5003"
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:5003
+    depends_on:
+      - workshop-service
+
+volumes:
+  postgres_data:
